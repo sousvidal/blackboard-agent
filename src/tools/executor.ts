@@ -4,11 +4,12 @@ import {
   grepSearch,
   type FileInfo,
   type GrepResult,
-} from '../utils/fs-utils.js';
-import { Blackboard } from './blackboard.js';
+} from '../utils/fs.js';
+import { Blackboard } from '../blackboard/blackboard.js';
 import { logger } from '../utils/logger.js';
+import { resolve, isAbsolute } from 'path';
 
-export { TOOLS } from './tool-definitions.js';
+export { TOOLS } from './definitions.js';
 
 export interface ToolResult {
   success: boolean;
@@ -30,6 +31,13 @@ const TOOL_HANDLERS: Record<string, ToolHandler> = {
   update_blackboard: (input, _basePath, blackboard) =>
     executeUpdateBlackboard(input, blackboard),
 };
+
+/**
+ * Resolve a path relative to basePath if it's not absolute
+ */
+function resolvePath(path: string, basePath: string): string {
+  return isAbsolute(path) ? path : resolve(basePath, path);
+}
 
 /**
  * Execute a tool and return the result
@@ -68,7 +76,9 @@ async function executeListDir(
   input: Record<string, unknown>,
   basePath: string
 ): Promise<Omit<ToolResult, 'durationMs'>> {
-  const path = String(input.path || basePath);
+  const path = input.path
+    ? resolvePath(String(input.path), basePath)
+    : basePath;
   const maxDepth = Math.min(Number(input.max_depth || 3), 5);
   const files = await listDirectory(path, maxDepth);
   return { success: true, output: formatFileList(files, path) };
@@ -115,9 +125,9 @@ function formatSize(bytes: number): string {
 
 async function executeFileRead(
   input: Record<string, unknown>,
-  _basePath: string
+  basePath: string
 ): Promise<Omit<ToolResult, 'durationMs'>> {
-  const path = String(input.path);
+  const path = resolvePath(String(input.path), basePath);
   const startLine = input.start_line ? Number(input.start_line) : undefined;
   const endLine = input.end_line ? Number(input.end_line) : undefined;
 
@@ -132,10 +142,10 @@ async function executeFileRead(
 
 async function executeGrepSearch(
   input: Record<string, unknown>,
-  _basePath: string
+  basePath: string
 ): Promise<Omit<ToolResult, 'durationMs'>> {
   const pattern = String(input.pattern);
-  const path = String(input.path);
+  const path = resolvePath(String(input.path), basePath);
   const maxResults = Number(input.max_results || 50);
 
   const results = await grepSearch(pattern, path, maxResults);

@@ -1,10 +1,10 @@
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
 import { readdir, readFile } from 'fs/promises';
-import { BlackboardAgent } from '../core/agent.js';
-import { Blackboard, type BlackboardData } from '../core/blackboard.js';
-import { getProfile, getAvailableProfiles } from '../core/analysis-profile.js';
-import { validatePath } from '../utils/fs-utils.js';
+import { BlackboardAgent } from '../agent/agent.js';
+import { Blackboard, type BlackboardData } from '../blackboard/blackboard.js';
+import { getProfile, getAvailableProfiles } from '../config/profiles.js';
+import { validatePath } from '../utils/fs.js';
 import { logger } from '../utils/logger.js';
 import {
   displayAgentEvent,

@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { Blackboard } from '../core/blackboard.js';
+import { Blackboard } from '../blackboard/blackboard.js';
 
 function formatSectionName(name: string): string {
   return name

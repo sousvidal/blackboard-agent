@@ -2,7 +2,7 @@ import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.mjs';
-import { Blackboard } from './blackboard.js';
+import { Blackboard } from '../blackboard/blackboard.js';
 import { logger } from '../utils/logger.js';
 
 export interface ToolCallRecord {

@@ -6,17 +6,17 @@ import type {
   Tool,
   ToolUseBlock,
 } from '@anthropic-ai/sdk/resources/messages.mjs';
-import { Blackboard } from './blackboard.js';
+import { Blackboard } from '../blackboard/blackboard.js';
 import { generateSystemPrompt } from './prompts.js';
-import type { AnalysisProfile } from './analysis-profile.js';
-import { interpolateMessage } from './analysis-profile.js';
-import type { ToolCallRecord } from './output-manager.js';
+import type { AnalysisProfile } from '../config/profiles.js';
+import { interpolateMessage } from '../config/profiles.js';
+import type { ToolCallRecord } from './output.js';
 import { logger } from '../utils/logger.js';
-import type { AgentStats } from './agent-stats.js';
-import { updateTokenStats } from './agent-stats.js';
-import { processToolCalls } from './agent-tools.js';
-import { buildToolHistory, formatCompactToolCall } from './agent-history.js';
-import type { AgentEvent } from './agent-types.js';
+import type { AgentStats } from './stats.js';
+import { updateTokenStats } from './stats.js';
+import { processToolCalls } from './tool-handler.js';
+import { buildToolHistory, formatCompactToolCall } from './history.js';
+import type { AgentEvent } from './types.js';
 
 export interface LoopState {
   anthropic: Anthropic;

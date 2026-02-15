@@ -1,4 +1,4 @@
-import type { ToolCallRecord } from './output-manager.js';
+import type { ToolCallRecord } from './output.js';
 
 function collectDirEntry(record: ToolCallRecord, dirs: Set<string>): void {
   const path = String(record.input.path || '');

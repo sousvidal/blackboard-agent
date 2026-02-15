@@ -1,6 +1,6 @@
 import chalk from 'chalk';
-import { Blackboard } from '../core/blackboard.js';
-import type { AgentEvent } from '../core/agent-types.js';
+import { Blackboard } from '../blackboard/blackboard.js';
+import type { AgentEvent } from '../agent/types.js';
 
 export {
   displayBlackboardSummary,

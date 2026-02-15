@@ -1,6 +1,6 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages.mjs';
-import type { Blackboard } from './blackboard.js';
-import type { AnalysisProfile } from './analysis-profile.js';
+import type { Blackboard } from '../blackboard/blackboard.js';
+import type { AnalysisProfile } from '../config/profiles.js';
 
 export interface AgentConfig {
   apiKey: string;

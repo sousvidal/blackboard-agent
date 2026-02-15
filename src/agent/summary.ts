@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { TextBlock } from '@anthropic-ai/sdk/resources/messages.mjs';
-import type { Blackboard } from './blackboard.js';
-import type { AnalysisProfile } from './analysis-profile.js';
+import type { Blackboard } from '../blackboard/blackboard.js';
+import type { AnalysisProfile } from '../config/profiles.js';
 import { logger } from '../utils/logger.js';
 
 export async function generateSummary(

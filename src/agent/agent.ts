@@ -3,34 +3,22 @@ import type {
   MessageParam,
   Tool,
 } from '@anthropic-ai/sdk/resources/messages.mjs';
-import { Blackboard } from './blackboard.js';
-import { TOOLS } from './tool-definitions.js';
+import { Blackboard } from '../blackboard/blackboard.js';
+import { TOOLS } from '../tools/definitions.js';
 import {
   type AnalysisProfile,
   CODEBASE_ANALYSIS_PROFILE,
-} from './analysis-profile.js';
-import { OutputManager, type ToolCallRecord } from './output-manager.js';
+} from '../config/profiles.js';
+import { OutputManager, type ToolCallRecord } from './output.js';
 import { logger } from '../utils/logger.js';
-import {
-  type AgentStats,
-  createEmptyStats,
-  finalizeStats,
-} from './agent-stats.js';
-import { generateSummarySafe } from './agent-summary.js';
-import { runAgentLoop } from './agent-loop.js';
+import { type AgentStats, createEmptyStats, finalizeStats } from './stats.js';
+import { generateSummarySafe } from './summary.js';
+import { runAgentLoop } from './loop.js';
 
-export type {
-  AgentConfig,
-  AgentEvent,
-  AgentEventCallback,
-} from './agent-types.js';
-export type { AgentStats } from './agent-stats.js';
+export type { AgentConfig, AgentEvent, AgentEventCallback } from './types.js';
+export type { AgentStats } from './stats.js';
 
-import type {
-  AgentConfig,
-  AgentEvent,
-  AgentEventCallback,
-} from './agent-types.js';
+import type { AgentConfig, AgentEvent, AgentEventCallback } from './types.js';
 
 export class BlackboardAgent {
   private anthropic: Anthropic;

@@ -1,4 +1,4 @@
-import { estimateTokens } from '../utils/token-counter.js';
+import { estimateTokens } from '../utils/tokens.js';
 
 export interface BlackboardSection {
   name: string;

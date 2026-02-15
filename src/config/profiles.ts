@@ -10,6 +10,8 @@ export interface AnalysisProfile {
   suggestedSections: SuggestedSection[];
   explorationHints: string[];
   summaryInstructions: string;
+  stallWarningThreshold?: number; // Iterations before warning about not saving (default: 3)
+  completionCriteria?: string[]; // Concrete signals for when analysis is complete
 }
 
 const profiles = new Map<string, AnalysisProfile>();
@@ -73,10 +75,22 @@ Start by exploring the structure and identifying key components. Use your tools 
   explorationHints: [
     'Start broad: list the root directory to see the overall structure',
     'Check package.json, setup files, or documentation for tech stack info',
+    'Use grep_search to find patterns before reading files (e.g., search for "import", "class", "function" to understand structure)',
     'Identify entry points (main files, index files, route definitions)',
+    'Batch related file_read calls in the same iteration for efficiency',
     'Understand how code is organized (by feature, layer, etc.)',
     'Focus on core functionality and main workflows',
     'Note important libraries and their usage patterns',
+  ],
+
+  stallWarningThreshold: 3,
+
+  completionCriteria: [
+    'All suggested sections have substantial content',
+    'Blackboard is at least 60% full with meaningful insights',
+    'Core architecture and patterns are documented',
+    'Key technologies and dependencies are identified',
+    'Main entry points and workflows are understood',
   ],
 
   summaryInstructions: `Include:

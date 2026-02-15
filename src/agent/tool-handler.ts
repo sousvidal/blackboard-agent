@@ -1,7 +1,7 @@
 import type { ToolUseBlock } from '@anthropic-ai/sdk/resources/messages.mjs';
-import { Blackboard } from './blackboard.js';
-import { executeTool } from './tools.js';
-import type { ToolCallRecord } from './output-manager.js';
+import { Blackboard } from '../blackboard/blackboard.js';
+import { executeTool } from '../tools/executor.js';
+import type { ToolCallRecord } from './output.js';
 
 export interface ToolExecutionResult {
   toolResults: Array<{
