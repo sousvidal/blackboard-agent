@@ -6,19 +6,25 @@ import type {
   ToolUseBlock,
 } from '@anthropic-ai/sdk/resources/messages.mjs';
 import { Blackboard } from './blackboard.js';
-import { TOOLS, executeTool } from './tools.js';
+import { TOOLS } from './tools.js';
 import { generateSystemPrompt } from './prompts.js';
 import {
   type AnalysisProfile,
   CODEBASE_ANALYSIS_PROFILE,
   interpolateMessage,
 } from './analysis-profile.js';
-import {
-  OutputManager,
-  type AgentStats,
-  type ToolCallRecord,
-} from './output-manager.js';
+import { OutputManager, type ToolCallRecord } from './output-manager.js';
 import { logger } from '../utils/logger.js';
+import {
+  type AgentStats,
+  createEmptyStats,
+  updateTokenStats,
+  finalizeStats,
+} from './agent-stats.js';
+import { processToolCalls } from './agent-tools.js';
+import { buildToolHistory, formatCompactToolCall } from './agent-history.js';
+
+export type { AgentStats } from './agent-stats.js';
 
 export interface AgentConfig {
   apiKey: string;
@@ -83,18 +89,7 @@ export class BlackboardAgent {
     }
 
     // Initialize tracking
-    this.stats = {
-      totalTokens: {
-        input: 0,
-        output: 0,
-        total: 0,
-        cacheCreation: 0,
-        cacheRead: 0,
-      },
-      iterations: 0,
-      toolCalls: 0,
-      startTime: new Date(),
-    };
+    this.stats = createEmptyStats();
     this.messages = [];
     this.toolCallHistory = [];
     this.compactToolHistory = [];
@@ -105,29 +100,39 @@ export class BlackboardAgent {
     this.blackboard = config.blackboard || new Blackboard(config.targetPath);
   }
 
-  private async handleAnalysisError(error: unknown): Promise<never> {
-    // Finalize stats on error
+  private formatErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private finalizeStatsOnError(): void {
     this.stats.endTime = this.stats.endTime || new Date();
     this.stats.durationMs =
       this.stats.durationMs ||
       this.stats.endTime.getTime() - this.stats.startTime.getTime();
+  }
 
-    if (this.config.saveOutput !== false) {
-      try {
-        await this.saveArtifacts(
-          error instanceof Error ? error.message : String(error)
-        );
-      } catch (saveError) {
-        logger.error({ saveError }, 'Failed to save error artifacts');
-      }
+  private async saveErrorArtifacts(errorMessage: string): Promise<void> {
+    if (this.config.saveOutput === false) {
+      return;
     }
+
+    try {
+      await this.saveArtifacts(errorMessage);
+    } catch (saveError) {
+      logger.error({ saveError }, 'Failed to save error artifacts');
+    }
+  }
+
+  private async handleAnalysisError(error: unknown): Promise<never> {
+    this.finalizeStatsOnError();
+
+    const errorMessage = this.formatErrorMessage(error);
+    await this.saveErrorArtifacts(errorMessage);
 
     logger.error({ error }, 'Agent analysis failed');
     this.emitEvent({
       type: 'error',
-      data: {
-        error: error instanceof Error ? error.message : String(error),
-      },
+      data: { error: errorMessage },
     });
     throw error;
   }
@@ -172,9 +177,7 @@ export class BlackboardAgent {
     await this.runAgentLoop();
 
     // Finalize stats
-    this.stats.endTime = new Date();
-    this.stats.durationMs =
-      this.stats.endTime.getTime() - this.stats.startTime.getTime();
+    finalizeStats(this.stats);
 
     this.emitEvent({
       type: 'complete',
@@ -265,6 +268,43 @@ ${this.blackboard.getAllSectionsForContext()}`;
     }
   }
 
+  private extractAndEmitThinking(response: Anthropic.Message): void {
+    const thinkingBlocks = response.content.filter(
+      (block): block is TextBlock => block.type === 'text'
+    );
+
+    if (thinkingBlocks.length > 0) {
+      const thinking = thinkingBlocks.map((block) => block.text).join('\n');
+      this.emitEvent({ type: 'thinking', data: { thinking } });
+    }
+  }
+
+  private checkCompletionNudge(
+    response: Anthropic.Message,
+    hasToolUse: boolean
+  ): string | null {
+    if (hasToolUse && response.stop_reason !== 'end_turn') {
+      return null;
+    }
+
+    const utilization =
+      this.blackboard.getTotalTokens() / this.blackboard.getMaxTokens();
+
+    if (utilization >= 0.65 || this.completionNudges >= 3) {
+      return null;
+    }
+
+    this.completionNudges++;
+    const nudgeMessage = `Your blackboard is only ${Math.round(utilization * 100)}% utilized with ${this.blackboard.getRemainingTokens()} tokens remaining. There is likely more to discover. Continue exploring and saving findings.`;
+
+    logger.info(
+      { utilization, nudge: this.completionNudges },
+      'Completion gate: nudging agent to continue'
+    );
+
+    return nudgeMessage;
+  }
+
   /**
    * Main agentic loop - BLACKBOARD PATTERN WITH ROLLING WINDOW
    */
@@ -274,7 +314,6 @@ ${this.blackboard.getAllSectionsForContext()}`;
     });
 
     this.messages = [{ role: 'user', content: initialMessage }];
-
     let workingMessages: MessageParam[] = [
       { role: 'user', content: initialMessage },
     ];
@@ -293,15 +332,17 @@ ${this.blackboard.getAllSectionsForContext()}`;
         },
       });
 
-      // Regenerate system prompt with current blackboard state + history
-      const toolHistorySummary = this.buildGroupedToolHistory();
-      const systemPrompt = generateSystemPrompt(
-        this.blackboard,
-        this.profile,
-        this.tools,
-        toolHistorySummary,
-        this.iterationsSinceBlackboardWrite
+      const toolHistorySummary = buildToolHistory(
+        this.toolCallHistory,
+        this.compactToolHistory
       );
+      const systemPrompt = generateSystemPrompt({
+        blackboard: this.blackboard,
+        profile: this.profile,
+        tools: this.tools,
+        toolHistorySummary,
+        iterationsSinceBlackboardWrite: this.iterationsSinceBlackboardWrite,
+      });
 
       const response = await this.anthropic.messages.create({
         model: this.config.model,
@@ -311,169 +352,78 @@ ${this.blackboard.getAllSectionsForContext()}`;
         messages: workingMessages,
       });
 
-      // Track token usage
-      this.stats.totalTokens.input += response.usage.input_tokens;
-      this.stats.totalTokens.output += response.usage.output_tokens;
-      this.stats.totalTokens.total =
-        this.stats.totalTokens.input + this.stats.totalTokens.output;
-
-      const usage = response.usage as {
-        input_tokens: number;
-        output_tokens: number;
-        cache_creation_input_tokens?: number;
-        cache_read_input_tokens?: number;
-      };
-
-      if (usage.cache_creation_input_tokens) {
-        this.stats.totalTokens.cacheCreation =
-          (this.stats.totalTokens.cacheCreation || 0) +
-          usage.cache_creation_input_tokens;
-      }
-      if (usage.cache_read_input_tokens) {
-        this.stats.totalTokens.cacheRead =
-          (this.stats.totalTokens.cacheRead || 0) +
-          usage.cache_read_input_tokens;
-      }
+      updateTokenStats(this.stats, response);
 
       logger.info(
         { stopReason: response.stop_reason, usage: response.usage },
         'Claude response received'
       );
 
+      this.extractAndEmitThinking(response);
+
       const hasToolUse = response.content.some(
         (block) => block.type === 'tool_use'
       );
 
-      // Extract thinking
-      const thinkingBlocks = response.content.filter(
-        (block): block is TextBlock => block.type === 'text'
-      );
+      const nudgeMessage = this.checkCompletionNudge(response, hasToolUse);
+      if (nudgeMessage) {
+        this.messages.push({ role: 'assistant', content: response.content });
+        this.messages.push({ role: 'user', content: nudgeMessage });
 
-      if (thinkingBlocks.length > 0) {
-        const thinking = thinkingBlocks.map((block) => block.text).join('\n');
-        this.emitEvent({ type: 'thinking', data: { thinking } });
+        workingMessages = [
+          { role: 'assistant', content: response.content },
+          { role: 'user', content: nudgeMessage },
+        ];
+        continue;
       }
 
-      // Agent wants to stop — check completion gate
       if (!hasToolUse || response.stop_reason === 'end_turn') {
-        const utilization =
-          this.blackboard.getTotalTokens() / this.blackboard.getMaxTokens();
-
-        if (utilization < 0.65 && this.completionNudges < 3) {
-          this.completionNudges++;
-          const nudgeMessage = `Your blackboard is only ${Math.round(utilization * 100)}% utilized with ${this.blackboard.getRemainingTokens()} tokens remaining. There is likely more to discover. Continue exploring and saving findings.`;
-
-          logger.info(
-            { utilization, nudge: this.completionNudges },
-            'Completion gate: nudging agent to continue'
-          );
-
-          // Archive in full conversation
-          this.messages.push({ role: 'assistant', content: response.content });
-          this.messages.push({ role: 'user', content: nudgeMessage });
-
-          workingMessages = [
-            { role: 'assistant', content: response.content },
-            { role: 'user', content: nudgeMessage },
-          ];
-          continue;
-        }
-
         logger.info('Agent completed analysis (no more tool calls)');
         break;
       }
 
-      // Process tool calls
       const toolUseBlocks = response.content.filter(
         (block): block is ToolUseBlock => block.type === 'tool_use'
       );
 
-      const toolResults: Array<{
-        type: 'tool_result';
-        tool_use_id: string;
-        content: string;
-      }> = [];
-
-      let wroteToBlackboardThisIteration = false;
-
-      for (const toolUse of toolUseBlocks) {
-        this.stats.toolCalls++;
-
-        this.emitEvent({
-          type: 'tool_call',
-          data: { name: toolUse.name, input: toolUse.input },
-        });
-
-        const result = await executeTool(
-          toolUse.name,
-          toolUse.input as Record<string, unknown>,
-          this.blackboard,
-          this.config.targetPath
-        );
-
-        this.toolCallHistory.push({
-          timestamp: new Date().toISOString(),
-          iteration: this.stats.iterations,
-          name: toolUse.name,
-          input: toolUse.input as Record<string, unknown>,
-          success: result.success,
-          output: result.output,
-          error: result.error,
-          durationMs: result.durationMs,
-        });
-
-        const compactDesc = this.formatCompactToolCall(
-          toolUse.name,
-          toolUse.input as Record<string, unknown>,
-          result
-        );
-        this.compactToolHistory.push(compactDesc);
-
-        if (toolUse.name === 'update_blackboard' && result.success) {
-          wroteToBlackboardThisIteration = true;
-          this.emitEvent({
-            type: 'blackboard_update',
-            data: {
-              section: (toolUse.input as { section: string }).section,
-              tokens: this.blackboard.getTotalTokens(),
-              maxTokens: this.blackboard.getMaxTokens(),
-            },
-          });
-        }
-
-        this.emitEvent({
-          type: 'tool_result',
-          data: {
-            name: toolUse.name,
-            success: result.success,
-            output: result.output,
-            error: result.error,
-            durationMs: result.durationMs,
+      const { toolResults, wroteToBlackboard } = await processToolCalls(
+        toolUseBlocks,
+        this.blackboard,
+        this.config.targetPath,
+        {
+          onToolCall: (name, input) => {
+            this.emitEvent({ type: 'tool_call', data: { name, input } });
           },
-        });
+          onToolResult: (result) => {
+            this.emitEvent({ type: 'tool_result', data: result });
+          },
+          onBlackboardUpdate: (section, tokens, maxTokens) => {
+            this.emitEvent({
+              type: 'blackboard_update',
+              data: { section, tokens, maxTokens },
+            });
+          },
+          recordToolCall: (record) => {
+            this.toolCallHistory.push(record);
+          },
+          recordCompactCall: (desc) => {
+            this.compactToolHistory.push(desc);
+          },
+          formatCompactCall: formatCompactToolCall,
+          getCurrentIteration: () => this.stats.iterations,
+          incrementToolCalls: () => {
+            this.stats.toolCalls++;
+          },
+        }
+      );
 
-        const resultContent = result.success
-          ? result.output
-          : `Error: ${result.error}`;
+      this.iterationsSinceBlackboardWrite = wroteToBlackboard
+        ? 0
+        : this.iterationsSinceBlackboardWrite + 1;
 
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: resultContent,
-        });
-      }
-
-      if (wroteToBlackboardThisIteration) {
-        this.iterationsSinceBlackboardWrite = 0;
-      } else {
-        this.iterationsSinceBlackboardWrite++;
-      }
-
-      // Archive full conversation
       this.messages.push({ role: 'assistant', content: response.content });
       this.messages.push({ role: 'user', content: toolResults });
 
-      // Rolling window
       workingMessages = [
         { role: 'assistant', content: response.content },
         { role: 'user', content: toolResults },
@@ -490,98 +440,6 @@ ${this.blackboard.getAllSectionsForContext()}`;
    * Build a grouped summary of tool history for the system prompt.
    * Groups by directory explored and files read, with recent calls listed.
    */
-  private buildGroupedToolHistory(): string {
-    if (this.compactToolHistory.length === 0) return '';
-
-    const dirs = new Set<string>();
-    const files = new Set<string>();
-
-    for (const record of this.toolCallHistory) {
-      if (record.name === 'list_dir') {
-        const path = String(record.input.path || '');
-        const short = path.split('/').slice(-2).join('/') || '/';
-        dirs.add(short);
-      } else if (record.name === 'file_read') {
-        const path = String(record.input.path || '');
-        files.add(path.split('/').pop() || path);
-      }
-    }
-
-    const recentHistory = this.compactToolHistory.slice(-15);
-    const skipped = this.compactToolHistory.length - recentHistory.length;
-
-    const lines = [
-      `\n## YOUR PROGRESS SO FAR (${this.compactToolHistory.length} tool calls)`,
-      '',
-    ];
-
-    if (dirs.size > 0) {
-      lines.push(`Directories explored: ${Array.from(dirs).join(', ')}`);
-    }
-    if (files.size > 0) {
-      const fileList = Array.from(files);
-      const shown = fileList.slice(0, 12);
-      const moreCount = fileList.length - shown.length;
-      lines.push(
-        `Files read: ${shown.join(', ')}${moreCount > 0 ? `, +${moreCount} more` : ''}`
-      );
-    }
-
-    lines.push('');
-    lines.push('Recent:');
-    if (skipped > 0) lines.push(`  (${skipped} earlier calls omitted)`);
-    recentHistory.forEach((t, i) => {
-      lines.push(`  ${skipped + i + 1}. ${t}`);
-    });
-
-    lines.push('');
-    lines.push(
-      "DO NOT repeat tool calls you've already made. Use the blackboard to track what you've learned and move on to new areas."
-    );
-
-    return lines.join('\n');
-  }
-
-  /**
-   * Format a tool call into a compact one-line summary
-   */
-  private formatCompactToolCall(
-    name: string,
-    input: Record<string, unknown>,
-    result: { success: boolean; output: string; error?: string }
-  ): string {
-    const success = result.success ? '✓' : '✗';
-
-    switch (name) {
-      case 'list_dir': {
-        const path = String(input.path || '');
-        const shortPath = path.split('/').slice(-2).join('/');
-        const match = result.output.match(/Found (\d+) items/);
-        const count = match ? match[1] : '?';
-        return `${success} list_dir(${shortPath}) → ${count} items`;
-      }
-      case 'file_read': {
-        const filePath = String(input.path || '');
-        const fileName = filePath.split('/').pop() || filePath;
-        const lineMatch = result.output.match(/\((\d+) lines\)/);
-        const lineCount = lineMatch ? lineMatch[1] : '?';
-        return `${success} file_read(${fileName}) → ${lineCount} lines`;
-      }
-      case 'grep_search': {
-        const pattern = String(input.pattern || '');
-        const matchCount = result.output.match(/Found (\d+) matches/);
-        const matches = matchCount ? matchCount[1] : '0';
-        return `${success} grep_search("${pattern}") → ${matches} matches`;
-      }
-      case 'update_blackboard': {
-        const section = String(input.section || '');
-        return `${success} update_blackboard(${section})`;
-      }
-      default:
-        return `${success} ${name}(...)`;
-    }
-  }
-
   private emitEvent(event: AgentEvent): void {
     if (this.onEvent) {
       this.onEvent(event);

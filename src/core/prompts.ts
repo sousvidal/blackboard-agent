@@ -19,43 +19,77 @@ function formatToolDescriptions(tools: Tool[]): string {
     .join('\n\n');
 }
 
-/**
- * Generate the system prompt from an AnalysisProfile, tools, and blackboard state
- */
-export function generateSystemPrompt(
-  blackboard: Blackboard,
-  profile: AnalysisProfile,
-  tools: Tool[],
-  toolHistorySummary: string = '',
-  iterationsSinceBlackboardWrite: number = 0
-): string {
-  const hasContent = blackboard.getTotalTokens() > 0;
+function buildStallWarning(iterationsSinceWrite: number): string {
+  if (iterationsSinceWrite < 2) {
+    return '';
+  }
 
-  // Build stall warning if needed
-  let stallWarning = '';
-  if (iterationsSinceBlackboardWrite >= 2) {
-    stallWarning = `
-⚠️ WARNING: You have NOT written to the blackboard in ${iterationsSinceBlackboardWrite} iterations.
+  return `
+⚠️ WARNING: You have NOT written to the blackboard in ${iterationsSinceWrite} iterations.
 Your findings from previous iterations are LOST because only the blackboard persists.
 You MUST call update_blackboard NOW before doing any more exploration.
 Summarize what you've learned so far and save it.`;
-  }
+}
 
-  // Build suggested sections list
-  const sectionsList = profile.suggestedSections
+function buildSectionsList(profile: AnalysisProfile): string {
+  return profile.suggestedSections
     .map((s) => `- **${s.name}**: ${s.description}`)
     .join('\n');
+}
 
-  // Build exploration hints
-  const hints = profile.explorationHints
-    .map((h, i) => `${i + 1}. ${h}`)
-    .join('\n');
+function buildExplorationHints(profile: AnalysisProfile): string {
+  return profile.explorationHints.map((h, i) => `${i + 1}. ${h}`).join('\n');
+}
 
-  // Build tool names for inline references
+function getExplorationToolNames(tools: Tool[]): string {
   const explorationTools = tools
     .filter((t) => t.name !== 'update_blackboard')
     .map((t) => t.name);
-  const toolNamesList = explorationTools.join(', ');
+  return explorationTools.join(', ');
+}
+
+function buildBlackboardSection(
+  blackboard: Blackboard,
+  hasContent: boolean
+): string {
+  const status = hasContent
+    ? '**Continuing analysis.** Review existing blackboard content below.'
+    : '**Fresh analysis.** The blackboard is empty — start filling it.';
+
+  return `## THE BLACKBOARD SYSTEM
+
+You have access to a "blackboard" - a structured knowledge store where you save important findings.
+- **Token budget**: ${blackboard.getMaxTokens()} tokens
+- **Current usage**: ${blackboard.getTotalTokens()} tokens
+- **Remaining**: ${blackboard.getRemainingTokens()} tokens
+
+${status}`;
+}
+
+/**
+ * Generate the system prompt from an AnalysisProfile, tools, and blackboard state
+ */
+export function generateSystemPrompt(options: {
+  blackboard: Blackboard;
+  profile: AnalysisProfile;
+  tools: Tool[];
+  toolHistorySummary?: string;
+  iterationsSinceBlackboardWrite?: number;
+}): string {
+  const {
+    blackboard,
+    profile,
+    tools,
+    toolHistorySummary = '',
+    iterationsSinceBlackboardWrite = 0,
+  } = options;
+
+  const hasContent = blackboard.getTotalTokens() > 0;
+  const stallWarning = buildStallWarning(iterationsSinceBlackboardWrite);
+  const sectionsList = buildSectionsList(profile);
+  const hints = buildExplorationHints(profile);
+  const toolNamesList = getExplorationToolNames(tools);
+  const blackboardSection = buildBlackboardSection(blackboard, hasContent);
 
   const prompt = `You are an expert analysis agent. Your goal is to systematically explore a target and record your findings.
 
@@ -78,14 +112,7 @@ Pattern for EVERY iteration:
 NEVER make a response with only exploration tools and no update_blackboard call.
 ${stallWarning}
 
-## THE BLACKBOARD SYSTEM
-
-You have access to a "blackboard" - a structured knowledge store where you save important findings.
-- **Token budget**: ${blackboard.getMaxTokens()} tokens
-- **Current usage**: ${blackboard.getTotalTokens()} tokens
-- **Remaining**: ${blackboard.getRemainingTokens()} tokens
-
-${hasContent ? '**Continuing analysis.** Review existing blackboard content below.' : '**Fresh analysis.** The blackboard is empty — start filling it.'}
+${blackboardSection}
 
 ### Suggested Sections
 
