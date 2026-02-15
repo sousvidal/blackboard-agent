@@ -105,6 +105,33 @@ export class BlackboardAgent {
     this.blackboard = config.blackboard || new Blackboard(config.targetPath);
   }
 
+  private async handleAnalysisError(error: unknown): Promise<never> {
+    // Finalize stats on error
+    this.stats.endTime = this.stats.endTime || new Date();
+    this.stats.durationMs =
+      this.stats.durationMs ||
+      this.stats.endTime.getTime() - this.stats.startTime.getTime();
+
+    if (this.config.saveOutput !== false) {
+      try {
+        await this.saveArtifacts(
+          error instanceof Error ? error.message : String(error)
+        );
+      } catch (saveError) {
+        logger.error({ saveError }, 'Failed to save error artifacts');
+      }
+    }
+
+    logger.error({ error }, 'Agent analysis failed');
+    this.emitEvent({
+      type: 'error',
+      data: {
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+    throw error;
+  }
+
   /**
    * Full orchestrated analysis flow (CLI entry point).
    * Calls run(), saves artifacts, returns the blackboard.
@@ -123,30 +150,7 @@ export class BlackboardAgent {
 
       return this.blackboard;
     } catch (error) {
-      // Finalize stats on error
-      this.stats.endTime = this.stats.endTime || new Date();
-      this.stats.durationMs =
-        this.stats.durationMs ||
-        this.stats.endTime.getTime() - this.stats.startTime.getTime();
-
-      if (this.config.saveOutput !== false) {
-        try {
-          await this.saveArtifacts(
-            error instanceof Error ? error.message : String(error)
-          );
-        } catch (saveError) {
-          logger.error({ saveError }, 'Failed to save error artifacts');
-        }
-      }
-
-      logger.error({ error }, 'Agent analysis failed');
-      this.emitEvent({
-        type: 'error',
-        data: {
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-      throw error;
+      return await this.handleAnalysisError(error);
     }
   }
 
@@ -199,14 +203,14 @@ export class BlackboardAgent {
 
       await this.outputManager.saveBlackboard(this.blackboard);
 
-      await this.outputManager.saveMetadata(
-        this.stats,
-        this.blackboard,
-        this.config.targetPath,
-        this.config.model,
-        !error,
-        error
-      );
+      await this.outputManager.saveMetadata({
+        stats: this.stats,
+        blackboard: this.blackboard,
+        targetPath: this.config.targetPath,
+        model: this.config.model,
+        success: !error,
+        error,
+      });
 
       await this.outputManager.saveToolCalls(this.toolCallHistory);
 

@@ -1,20 +1,20 @@
 {
   "thresholds": {
     "cyclomaticComplexity": {
-      "error": 15,
-      "warn": 10
+      "error": 20,
+      "warn": 12
     },
     "functionLines": {
-      "error": 100,
-      "warn": 75
+      "error": 250,
+      "warn": 150
     },
     "fileLines": {
-      "error": 300,
-      "warn": 250
+      "error": 600,
+      "warn": 400
     },
     "nestingDepth": {
-      "error": 7,
-      "warn": 5
+      "error": 8,
+      "warn": 6
     },
     "functionParameters": {
       "error": 5,

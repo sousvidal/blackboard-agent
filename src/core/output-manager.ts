@@ -130,14 +130,15 @@ export class OutputManager {
   /**
    * Save metadata
    */
-  async saveMetadata(
-    stats: AgentStats,
-    blackboard: Blackboard,
-    targetPath: string,
-    model: string,
-    success: boolean,
-    error?: string
-  ): Promise<void> {
+  async saveMetadata(options: {
+    stats: AgentStats;
+    blackboard: Blackboard;
+    targetPath: string;
+    model: string;
+    success: boolean;
+    error?: string;
+  }): Promise<void> {
+    const { stats, blackboard, targetPath, model, success, error } = options;
     const metadataPath = join(this.analysisPath, 'metadata.json');
 
     const metadata: AnalysisMetadata = {
