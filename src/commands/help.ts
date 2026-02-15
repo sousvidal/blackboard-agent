@@ -1,6 +1,21 @@
 import chalk from 'chalk';
 import { logger } from '../utils/logger.js';
 
+interface HelpEntry {
+  left: string;
+  right: string;
+}
+
+function renderEntries(entries: HelpEntry[]): void {
+  const maxLeft = Math.max(...entries.map((e) => e.left.length));
+  for (const entry of entries) {
+    const padding = ' '.repeat(maxLeft - entry.left.length + 2);
+    console.log(
+      chalk.green(`  ${entry.left}`) + padding + chalk.white(entry.right)
+    );
+  }
+}
+
 export function helpCommand() {
   console.log(chalk.cyan.bold('\nBlackboard Agent CLI\n'));
   console.log(
@@ -11,45 +26,26 @@ export function helpCommand() {
   console.log(chalk.white('  agent [command] [options]\n'));
 
   console.log(chalk.yellow.bold('Available Commands:'));
-  console.log(
-    chalk.green('  analyze') +
-      chalk.gray('  ') +
-      chalk.white('Analyze a codebase using AI agent')
-  );
-  console.log(
-    chalk.green('  help') +
-      chalk.gray('     ') +
-      chalk.white('Display this help message')
-  );
-  console.log(
-    chalk.green('  version') +
-      chalk.gray('  ') +
-      chalk.white('Display version information')
-  );
+  renderEntries([
+    { left: 'analyze', right: 'Analyze a codebase using AI agent' },
+    { left: 'help', right: 'Display this help message' },
+    { left: 'version', right: 'Display version information' },
+  ]);
 
   console.log(chalk.yellow.bold('\nAnalyze Options:'));
-  console.log(
-    chalk.green('  -p, --path <path>') +
-      chalk.gray('  ') +
-      chalk.white('Target directory to analyze (default: current)')
-  );
-  console.log(
-    chalk.green('  --show') +
-      chalk.gray('            ') +
-      chalk.white('Show most recent analysis from .output folder')
-  );
+  renderEntries([
+    {
+      left: '-p, --path <path>',
+      right: 'Target directory to analyze (default: current)',
+    },
+    { left: '--show', right: 'Show most recent analysis from .output folder' },
+  ]);
 
   console.log(chalk.yellow.bold('\nGlobal Options:'));
-  console.log(
-    chalk.green('  -h, --help') +
-      chalk.gray('        ') +
-      chalk.white('Display help for a command')
-  );
-  console.log(
-    chalk.green('  -V, --version') +
-      chalk.gray('     ') +
-      chalk.white('Display version information')
-  );
+  renderEntries([
+    { left: '-h, --help', right: 'Display help for a command' },
+    { left: '-V, --version', right: 'Display version information' },
+  ]);
 
   console.log(chalk.yellow.bold('\nExamples:'));
   console.log(

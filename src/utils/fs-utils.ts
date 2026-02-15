@@ -16,46 +16,46 @@ export interface GrepResult {
   match: string;
 }
 
+interface ListContext {
+  targetPath: string;
+  maxDepth: number;
+  currentDepth: number;
+}
+
+interface GrepContext {
+  regex: RegExp;
+  results: GrepResult[];
+  maxResults: number;
+}
+
+const IGNORED_ENTRIES = new Set(['node_modules', 'dist', 'build', 'coverage']);
+
 function shouldIgnoreEntry(entry: string): boolean {
-  return (
-    entry.startsWith('.') ||
-    entry === 'node_modules' ||
-    entry === 'dist' ||
-    entry === 'build' ||
-    entry === 'coverage'
-  );
+  return entry.startsWith('.') || IGNORED_ENTRIES.has(entry);
 }
 
 async function processDirectoryEntry(
   entry: string,
-  targetPath: string,
-  maxDepth: number,
-  currentDepth: number,
+  ctx: ListContext,
   results: FileInfo[]
 ): Promise<void> {
-  if (shouldIgnoreEntry(entry)) {
-    return;
+  if (shouldIgnoreEntry(entry)) return;
+
+  const fullPath = join(ctx.targetPath, entry);
+  const stats = await stat(fullPath);
+  const isDir = stats.isDirectory();
+
+  if (isDir) {
+    results.push({ name: entry, path: fullPath, type: 'directory' });
   }
 
-  const fullPath = join(targetPath, entry);
-  const stats = await stat(fullPath);
-
-  if (stats.isDirectory()) {
-    results.push({
-      name: entry,
-      path: fullPath,
-      type: 'directory',
-    });
-
-    if (currentDepth + 1 < maxDepth) {
-      const subResults = await listDirectory(
-        fullPath,
-        maxDepth,
-        currentDepth + 1
-      );
-      results.push(...subResults);
-    }
-    return;
+  if (isDir && ctx.currentDepth + 1 < ctx.maxDepth) {
+    const subResults = await listDirectory(
+      fullPath,
+      ctx.maxDepth,
+      ctx.currentDepth + 1
+    );
+    results.push(...subResults);
   }
 
   if (stats.isFile()) {
@@ -76,30 +76,21 @@ export async function listDirectory(
   maxDepth: number = 3,
   currentDepth: number = 0
 ): Promise<FileInfo[]> {
-  if (currentDepth >= maxDepth) {
-    return [];
-  }
+  if (currentDepth >= maxDepth) return [];
 
-  try {
-    const entries = await readdir(targetPath);
-    const results: FileInfo[] = [];
-
-    for (const entry of entries) {
-      await processDirectoryEntry(
-        entry,
-        targetPath,
-        maxDepth,
-        currentDepth,
-        results
-      );
-    }
-
-    return results;
-  } catch (error) {
+  const entries = await readdir(targetPath).catch((error: unknown) => {
     throw new Error(
       `Failed to list directory ${targetPath}: ${error instanceof Error ? error.message : String(error)}`
     );
+  });
+  const results: FileInfo[] = [];
+
+  const ctx: ListContext = { targetPath, maxDepth, currentDepth };
+  for (const entry of entries) {
+    await processDirectoryEntry(entry, ctx, results);
   }
+
+  return results;
 }
 
 function formatLinesWithNumbers(lines: string[], startIndex: number): string {
@@ -116,102 +107,88 @@ export async function readFileContent(
   startLine?: number,
   endLine?: number
 ): Promise<string> {
-  try {
-    const content = await readFile(filePath, 'utf-8');
-    const lines = content.split('\n');
-
-    if (startLine === undefined && endLine === undefined) {
-      return formatLinesWithNumbers(lines, 0);
-    }
-
-    const start = Math.max(0, (startLine ?? 1) - 1);
-    const end = endLine ? Math.min(lines.length, endLine) : lines.length;
-    const selectedLines = lines.slice(start, end);
-
-    return formatLinesWithNumbers(selectedLines, start);
-  } catch (error) {
+  const content = await readFile(filePath, 'utf-8').catch((error: unknown) => {
     throw new Error(
       `Failed to read file ${filePath}: ${error instanceof Error ? error.message : String(error)}`
     );
+  });
+  const lines = content.split('\n');
+
+  if (startLine === undefined && endLine === undefined) {
+    return formatLinesWithNumbers(lines, 0);
   }
+
+  const start = Math.max(0, (startLine ?? 1) - 1);
+  const end = endLine ? Math.min(lines.length, endLine) : lines.length;
+  return formatLinesWithNumbers(lines.slice(start, end), start);
 }
 
 function isTextFile(filePath: string): boolean {
   return /\.(ts|js|json|md|txt|tsx|jsx|css|html|yml|yaml)$/.test(filePath);
 }
 
+function collectLineMatch(
+  line: string,
+  lineNum: number,
+  filePath: string,
+  ctx: GrepContext
+): void {
+  if (ctx.results.length >= ctx.maxResults) return;
+  const m = line.match(ctx.regex);
+  if (m) {
+    ctx.results.push({
+      file: filePath,
+      line: lineNum,
+      content: line.trim(),
+      match: m[0],
+    });
+  }
+}
+
 async function searchFileForPattern(
   filePath: string,
-  regex: RegExp,
-  results: GrepResult[],
-  maxResults: number
+  ctx: GrepContext
 ): Promise<void> {
-  if (results.length >= maxResults) {
+  if (ctx.results.length >= ctx.maxResults) return;
+
+  const content = await readFile(filePath, 'utf-8').catch(() => null);
+  if (content === null) return;
+
+  content.split('\n').forEach((line, i) => {
+    collectLineMatch(line, i + 1, filePath, ctx);
+  });
+}
+
+async function processGrepEntry(
+  entry: string,
+  dirPath: string,
+  ctx: GrepContext
+): Promise<void> {
+  if (shouldIgnoreEntry(entry)) return;
+
+  const fullPath = join(dirPath, entry);
+  const stats = await stat(fullPath);
+
+  if (stats.isDirectory()) {
+    await walkDirectoryForGrep(fullPath, ctx);
     return;
   }
 
-  try {
-    const content = await readFile(filePath, 'utf-8');
-    const lines = content.split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-      if (results.length >= maxResults) {
-        break;
-      }
-
-      const line = lines[i];
-      const matches = line.match(regex);
-
-      if (matches) {
-        results.push({
-          file: filePath,
-          line: i + 1,
-          content: line.trim(),
-          match: matches[0],
-        });
-      }
-    }
-  } catch (error) {
-    // Skip files that can't be read
+  if (stats.isFile() && isTextFile(fullPath)) {
+    await searchFileForPattern(fullPath, ctx);
   }
 }
 
 async function walkDirectoryForGrep(
   dirPath: string,
-  regex: RegExp,
-  results: GrepResult[],
-  maxResults: number
+  ctx: GrepContext
 ): Promise<void> {
-  if (results.length >= maxResults) {
-    return;
-  }
+  if (ctx.results.length >= ctx.maxResults) return;
 
-  try {
-    const entries = await readdir(dirPath);
+  const entries = await readdir(dirPath).catch(() => [] as string[]);
 
-    for (const entry of entries) {
-      if (results.length >= maxResults) {
-        break;
-      }
-
-      if (shouldIgnoreEntry(entry)) {
-        continue;
-      }
-
-      const fullPath = join(dirPath, entry);
-      const stats = await stat(fullPath);
-
-      if (stats.isDirectory()) {
-        await walkDirectoryForGrep(fullPath, regex, results, maxResults);
-        continue;
-      }
-
-      if (stats.isFile() && isTextFile(fullPath)) {
-        await searchFileForPattern(fullPath, regex, results, maxResults);
-      }
-    }
-  } catch (error) {
-    // Skip directories we can't access
+  for (const entry of entries) {
+    await processGrepEntry(entry, dirPath, ctx);
   }
 }
 
@@ -223,18 +200,21 @@ export async function grepSearch(
   targetPath: string,
   maxResults: number = 50
 ): Promise<GrepResult[]> {
-  const results: GrepResult[] = [];
-  const regex = new RegExp(pattern, 'gi');
+  const ctx: GrepContext = {
+    results: [],
+    regex: new RegExp(pattern, 'gi'),
+    maxResults,
+  };
 
   const stats = await stat(targetPath);
 
   if (stats.isFile()) {
-    await searchFileForPattern(targetPath, regex, results, maxResults);
-  } else {
-    await walkDirectoryForGrep(targetPath, regex, results, maxResults);
+    await searchFileForPattern(targetPath, ctx);
+    return ctx.results;
   }
 
-  return results;
+  await walkDirectoryForGrep(targetPath, ctx);
+  return ctx.results;
 }
 
 /**
@@ -248,16 +228,14 @@ export function validatePath(targetPath: string): {
     return { valid: false, error: 'Path does not exist' };
   }
 
-  try {
-    const stats = statSync(targetPath);
-    if (!stats.isDirectory() && !stats.isFile()) {
-      return { valid: false, error: 'Path is not a file or directory' };
-    }
-    return { valid: true };
-  } catch (error) {
-    return {
-      valid: false,
-      error: `Cannot access path: ${error instanceof Error ? error.message : String(error)}`,
-    };
+  const stats = existsSync(targetPath) ? statSync(targetPath) : null;
+  if (!stats) {
+    return { valid: false, error: 'Cannot access path' };
   }
+
+  if (!stats.isDirectory() && !stats.isFile()) {
+    return { valid: false, error: 'Path is not a file or directory' };
+  }
+
+  return { valid: true };
 }

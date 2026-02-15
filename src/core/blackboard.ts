@@ -51,13 +51,13 @@ export class Blackboard {
     maxTokens?: number
   ): Blackboard {
     const bb = new Blackboard(targetPath, maxTokens);
-    const failures: string[] = [];
-    for (const [name, content] of Object.entries(sections)) {
-      const result = bb.updateSection(name, content, true);
-      if (!result.success) {
-        failures.push(`${name}: ${result.message}`);
-      }
-    }
+    const failures = Object.entries(sections)
+      .map(([name, content]) => {
+        const result = bb.updateSection(name, content, true);
+        return result.success ? null : `${name}: ${result.message}`;
+      })
+      .filter((f): f is string => f !== null);
+
     if (failures.length > 0) {
       throw new Error(
         `Blackboard seed failed for ${failures.length} section(s):\n${failures.join('\n')}`
@@ -130,29 +130,29 @@ export class Blackboard {
    * Get all sections as a formatted string for context
    */
   getAllSectionsForContext(): string {
-    const parts: string[] = ['=== BLACKBOARD ===\n'];
+    const sectionParts = Array.from(this.sections.entries())
+      .filter(([, section]) => section.content)
+      .flatMap(([name, section]) => [
+        `## ${name.toUpperCase()}`,
+        section.content,
+        '',
+      ]);
 
-    for (const [name, section] of this.sections.entries()) {
-      if (section.content) {
-        parts.push(`## ${name.toUpperCase()}`);
-        parts.push(section.content);
-        parts.push('');
-      }
-    }
-
-    parts.push('=== END BLACKBOARD ===');
-    return parts.join('\n');
+    return [
+      '=== BLACKBOARD ===\n',
+      ...sectionParts,
+      '=== END BLACKBOARD ===',
+    ].join('\n');
   }
 
   /**
    * Get total tokens used across all sections
    */
   getTotalTokens(): number {
-    let total = 0;
-    for (const section of this.sections.values()) {
-      total += section.tokens;
-    }
-    return total;
+    return Array.from(this.sections.values()).reduce(
+      (sum, s) => sum + s.tokens,
+      0
+    );
   }
 
   /**
@@ -195,28 +195,24 @@ export class Blackboard {
    * Export blackboard as markdown
    */
   toMarkdown(): string {
-    const lines: string[] = [];
+    const header = [
+      '# Analysis Blackboard\n',
+      `**Target:** ${this.targetPath}`,
+      `**Tokens:** ${this.getTotalTokens()} / ${this.maxTokens} (${Math.round((this.getTotalTokens() / this.maxTokens) * 100)}%)`,
+      `**Last Updated:** ${this.updatedAt.toISOString()}\n`,
+      '---\n',
+    ];
 
-    lines.push('# Analysis Blackboard\n');
-    lines.push(`**Target:** ${this.targetPath}`);
-    lines.push(
-      `**Tokens:** ${this.getTotalTokens()} / ${this.maxTokens} (${Math.round((this.getTotalTokens() / this.maxTokens) * 100)}%)`
-    );
-    lines.push(`**Last Updated:** ${this.updatedAt.toISOString()}\n`);
-    lines.push('---\n');
+    const sectionLines = Array.from(this.sections.entries())
+      .filter(([, section]) => section.content)
+      .flatMap(([name, section]) => [
+        `## ${this.formatSectionName(name)}\n`,
+        section.content,
+        `\n*${section.tokens} tokens, updated ${section.updatedAt.toLocaleString()}*\n`,
+        '---\n',
+      ]);
 
-    for (const [name, section] of this.sections.entries()) {
-      if (section.content) {
-        lines.push(`## ${this.formatSectionName(name)}\n`);
-        lines.push(section.content);
-        lines.push(
-          `\n*${section.tokens} tokens, updated ${section.updatedAt.toLocaleString()}*\n`
-        );
-        lines.push('---\n');
-      }
-    }
-
-    return lines.join('\n');
+    return [...header, ...sectionLines].join('\n');
   }
 
   /**
@@ -233,15 +229,13 @@ export class Blackboard {
    * Serialize to JSON
    */
   toJSON(): BlackboardData {
-    const sectionsObj: Record<string, BlackboardSection> = {};
-    for (const [key, value] of this.sections.entries()) {
-      sectionsObj[key] = value;
-    }
-
     return {
       id: this.id,
       targetPath: this.targetPath,
-      sections: sectionsObj,
+      sections: Object.fromEntries(this.sections.entries()) as Record<
+        string,
+        BlackboardSection
+      >,
       totalTokens: this.getTotalTokens(),
       maxTokens: this.maxTokens,
       createdAt: this.createdAt.toISOString(),
@@ -258,14 +252,14 @@ export class Blackboard {
     blackboard.createdAt = new Date(data.createdAt);
     blackboard.updatedAt = new Date(data.updatedAt);
 
-    for (const [key, sectionData] of Object.entries(data.sections)) {
-      if (sectionData.content) {
+    Object.entries(data.sections)
+      .filter(([, sectionData]) => sectionData.content)
+      .forEach(([key, sectionData]) => {
         blackboard.sections.set(key, {
           ...sectionData,
           updatedAt: new Date(sectionData.updatedAt),
         });
-      }
-    }
+      });
 
     return blackboard;
   }

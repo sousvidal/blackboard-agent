@@ -1,6 +1,13 @@
 import chalk from 'chalk';
 import { Blackboard } from '../core/blackboard.js';
-import type { AgentEvent } from '../core/agent.js';
+import type { AgentEvent } from '../core/agent-types.js';
+
+export {
+  displayBlackboardSummary,
+  displayBlackboardStatus,
+  displayApiKeyError,
+  displayPathError,
+} from './ui-display.js';
 
 /**
  * Display agent events in a user-friendly way
@@ -112,12 +119,10 @@ function displayIteration(data: {
 }
 
 function displayThinking(data: { thinking: string }): void {
-  // Truncate very long thinking outputs
   const thinking =
     data.thinking.length > 500
       ? data.thinking.substring(0, 500) + '...'
       : data.thinking;
-
   console.log(chalk.blue('\n💭 Agent: ') + chalk.white(thinking));
 }
 
@@ -134,7 +139,6 @@ function displayToolResult(data: {
   durationMs: number;
 }): void {
   if (data.success) {
-    // Show a summary, not the full output (which can be very long)
     const lines = data.output.split('\n');
     const summary =
       lines.length > 3 ? `${lines.slice(0, 2).join(' ')}...` : data.output;
@@ -213,138 +217,23 @@ function displayError(data: { error: string }): void {
   console.log(chalk.red.bold('\n❌ Error: ') + chalk.white(data.error));
 }
 
-/**
- * Display the full blackboard summary
- */
-export function displayBlackboardSummary(blackboard: Blackboard): void {
-  console.log(chalk.cyan.bold('\n═'.repeat(60)));
-  console.log(chalk.cyan.bold('           BLACKBOARD SUMMARY'));
-  console.log(chalk.cyan.bold('═'.repeat(60)) + '\n');
-
-  const sections = blackboard.getSections();
-
-  if (sections.length === 0) {
-    console.log(chalk.yellow('No content on blackboard yet.'));
-    return;
+function formatEntryValue(key: string, value: unknown): string {
+  if (typeof value === 'string' && value.length > 50) {
+    return `${key}="${value.substring(0, 47)}..."`;
   }
-
-  for (const section of sections) {
-    console.log(chalk.yellow.bold(`## ${formatSectionName(section.name)}`));
-    console.log(
-      chalk.gray(
-        `(${section.tokens} tokens, updated ${section.updatedAt.toLocaleString()})\n`
-      )
-    );
-    console.log(chalk.white(section.content));
-    console.log(chalk.gray('\n' + '─'.repeat(60) + '\n'));
-  }
-
-  const totalTokens = blackboard.getTotalTokens();
-  const maxTokens = blackboard.getMaxTokens();
-  const percentage = Math.round((totalTokens / maxTokens) * 100);
-
-  console.log(
-    chalk.cyan.bold('Total Usage: ') +
-      chalk.white(`${totalTokens} / ${maxTokens} tokens (${percentage}%)`)
-  );
-  console.log(chalk.cyan.bold('═'.repeat(60)) + '\n');
+  return `${key}=${JSON.stringify(value)}`;
 }
 
-/**
- * Display initial status when showing existing blackboard
- */
-export function displayBlackboardStatus(blackboard: Blackboard): void {
-  console.log(chalk.cyan.bold('\n📋 Blackboard Status\n'));
-  console.log(
-    chalk.white(`Target: ${chalk.yellow(blackboard.getTargetPath())}`)
-  );
-  console.log(chalk.white(`Session: ${chalk.gray(blackboard.getId())}`));
-  console.log(
-    chalk.white(
-      `Created: ${chalk.gray(blackboard.getCreatedAt().toLocaleString())}`
-    )
-  );
-  console.log(
-    chalk.white(
-      `Updated: ${chalk.gray(blackboard.getUpdatedAt().toLocaleString())}`
-    )
-  );
-
-  const totalTokens = blackboard.getTotalTokens();
-  const maxTokens = blackboard.getMaxTokens();
-  const percentage = Math.round((totalTokens / maxTokens) * 100);
-
-  console.log(
-    chalk.white(
-      `Tokens: ${chalk.green(`${totalTokens} / ${maxTokens}`)} ${chalk.gray(`(${percentage}%)`)}`
-    )
-  );
-
-  const sections = blackboard.getSections();
-  console.log(
-    chalk.white(`Sections: ${chalk.green(sections.length)} with content\n`)
-  );
-}
-
-/**
- * Format tool input for display
- */
 function formatToolInput(input: unknown): string {
-  if (typeof input === 'object' && input !== null) {
-    const obj = input as Record<string, unknown>;
-    const parts: string[] = [];
+  if (typeof input !== 'object' || input === null) return String(input);
 
-    for (const [key, value] of Object.entries(obj)) {
-      if (typeof value === 'string' && value.length > 50) {
-        parts.push(`${key}="${value.substring(0, 47)}..."`);
-      } else {
-        parts.push(`${key}=${JSON.stringify(value)}`);
-      }
-    }
-
-    return parts.join(', ');
-  }
-
-  return String(input);
+  return Object.entries(input as Record<string, unknown>)
+    .map(([key, value]) => formatEntryValue(key, value))
+    .join(', ');
 }
 
-/**
- * Format section name for display
- */
-function formatSectionName(name: string): string {
-  return name
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-/**
- * Create a simple progress bar
- */
 function createProgressBar(percentage: number, width: number = 20): string {
   const filled = Math.round((percentage / 100) * width);
   const empty = width - filled;
-
   return chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(empty));
-}
-
-/**
- * Display API key error message
- */
-export function displayApiKeyError(): void {
-  console.log(chalk.red.bold('\n❌ Error: ANTHROPIC_API_KEY not found\n'));
-  console.log(chalk.white('Please set your Anthropic API key:\n'));
-  console.log(chalk.yellow('  export ANTHROPIC_API_KEY="your-key-here"\n'));
-  console.log(
-    chalk.gray('Get your API key at: https://console.anthropic.com/\n')
-  );
-}
-
-/**
- * Display path validation error
- */
-export function displayPathError(path: string, error: string): void {
-  console.log(chalk.red.bold('\n❌ Error: Invalid path\n'));
-  console.log(chalk.white(`Path: ${chalk.yellow(path)}`));
-  console.log(chalk.white(`Error: ${error}\n`));
 }

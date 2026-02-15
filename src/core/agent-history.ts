@@ -1,5 +1,15 @@
 import type { ToolCallRecord } from './output-manager.js';
 
+function collectDirEntry(record: ToolCallRecord, dirs: Set<string>): void {
+  const path = String(record.input.path || '');
+  dirs.add(path.split('/').slice(-2).join('/') || '/');
+}
+
+function collectFileEntry(record: ToolCallRecord, files: Set<string>): void {
+  const path = String(record.input.path || '');
+  files.add(path.split('/').pop() || path);
+}
+
 function collectDirsAndFiles(toolCallHistory: ToolCallRecord[]): {
   dirs: Set<string>;
   files: Set<string>;
@@ -8,14 +18,8 @@ function collectDirsAndFiles(toolCallHistory: ToolCallRecord[]): {
   const files = new Set<string>();
 
   for (const record of toolCallHistory) {
-    if (record.name === 'list_dir') {
-      const path = String(record.input.path || '');
-      const short = path.split('/').slice(-2).join('/') || '/';
-      dirs.add(short);
-    } else if (record.name === 'file_read') {
-      const path = String(record.input.path || '');
-      files.add(path.split('/').pop() || path);
-    }
+    if (record.name === 'list_dir') collectDirEntry(record, dirs);
+    if (record.name === 'file_read') collectFileEntry(record, files);
   }
 
   return { dirs, files };
@@ -78,50 +82,65 @@ export function buildToolHistory(
   return lines.join('\n');
 }
 
+type CompactFormatter = (
+  input: Record<string, unknown>,
+  result: Record<string, unknown>
+) => string;
+
+function formatListDir(
+  input: Record<string, unknown>,
+  result: Record<string, unknown>
+): string {
+  const path = String(input.path || '')
+    .split('/')
+    .slice(-2)
+    .join('/');
+  const count = result.success
+    ? `${(result.output as string).split('\n').length} items`
+    : 'failed';
+  return `list_dir(${path}) → ${count}`;
+}
+
+function formatFileRead(input: Record<string, unknown>): string {
+  const path = String(input.path || '')
+    .split('/')
+    .pop();
+  const lines =
+    typeof input.end_line === 'number'
+      ? `lines ${String(input.start_line || 1)}-${String(input.end_line)}`
+      : 'full file';
+  return `file_read(${path}, ${lines})`;
+}
+
+function formatGrepSearch(
+  input: Record<string, unknown>,
+  result: Record<string, unknown>
+): string {
+  const pattern = String(input.pattern || '');
+  const count = result.success
+    ? `${(result.output as string).split('\n').length} matches`
+    : 'failed';
+  return `grep("${pattern}") → ${count}`;
+}
+
+function formatBlackboardUpdate(input: Record<string, unknown>): string {
+  return `update_blackboard(${String(input.section || '')})`;
+}
+
+const COMPACT_FORMATTERS: Record<string, CompactFormatter> = {
+  list_dir: formatListDir,
+  file_read: (input) => formatFileRead(input),
+  grep_search: formatGrepSearch,
+  update_blackboard: (input) => formatBlackboardUpdate(input),
+};
+
 export function formatCompactToolCall(
   name: string,
   input: Record<string, unknown>,
   result: Record<string, unknown>
 ): string {
   const success = result.success ? '✓' : '✗';
-
-  switch (name) {
-    case 'list_dir': {
-      const path = String(input.path || '')
-        .split('/')
-        .slice(-2)
-        .join('/');
-      const count = result.success
-        ? `${(result.output as string).split('\n').length} items`
-        : 'failed';
-      return `${success} list_dir(${path}) → ${count}`;
-    }
-
-    case 'file_read': {
-      const path = String(input.path || '')
-        .split('/')
-        .pop();
-      const lines =
-        typeof input.end_line === 'number'
-          ? `lines ${String(input.start_line || 1)}-${String(input.end_line)}`
-          : 'full file';
-      return `${success} file_read(${path}, ${lines})`;
-    }
-
-    case 'grep_search': {
-      const pattern = String(input.pattern || '');
-      const count = result.success
-        ? `${(result.output as string).split('\n').length} matches`
-        : 'failed';
-      return `${success} grep("${pattern}") → ${count}`;
-    }
-
-    case 'update_blackboard': {
-      const section = String(input.section || '');
-      return `${success} update_blackboard(${section})`;
-    }
-
-    default:
-      return `${success} ${name}(...)`;
-  }
+  const formatter = COMPACT_FORMATTERS[name];
+  const description = formatter ? formatter(input, result) : `${name}(...)`;
+  return `${success} ${description}`;
 }
