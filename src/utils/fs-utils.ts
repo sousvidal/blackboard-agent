@@ -16,6 +16,58 @@ export interface GrepResult {
   match: string;
 }
 
+function shouldIgnoreEntry(entry: string): boolean {
+  return (
+    entry.startsWith('.') ||
+    entry === 'node_modules' ||
+    entry === 'dist' ||
+    entry === 'build' ||
+    entry === 'coverage'
+  );
+}
+
+async function processDirectoryEntry(
+  entry: string,
+  targetPath: string,
+  maxDepth: number,
+  currentDepth: number,
+  results: FileInfo[]
+): Promise<void> {
+  if (shouldIgnoreEntry(entry)) {
+    return;
+  }
+
+  const fullPath = join(targetPath, entry);
+  const stats = await stat(fullPath);
+
+  if (stats.isDirectory()) {
+    results.push({
+      name: entry,
+      path: fullPath,
+      type: 'directory',
+    });
+
+    if (currentDepth + 1 < maxDepth) {
+      const subResults = await listDirectory(
+        fullPath,
+        maxDepth,
+        currentDepth + 1
+      );
+      results.push(...subResults);
+    }
+    return;
+  }
+
+  if (stats.isFile()) {
+    results.push({
+      name: entry,
+      path: fullPath,
+      type: 'file',
+      size: stats.size,
+    });
+  }
+}
+
 /**
  * List files and directories at a given path
  */
@@ -33,44 +85,13 @@ export async function listDirectory(
     const results: FileInfo[] = [];
 
     for (const entry of entries) {
-      // Skip hidden files and common ignore patterns
-      if (
-        entry.startsWith('.') ||
-        entry === 'node_modules' ||
-        entry === 'dist' ||
-        entry === 'build' ||
-        entry === 'coverage'
-      ) {
-        continue;
-      }
-
-      const fullPath = join(targetPath, entry);
-      const stats = await stat(fullPath);
-
-      if (stats.isDirectory()) {
-        results.push({
-          name: entry,
-          path: fullPath,
-          type: 'directory',
-        });
-
-        // Recursively list subdirectories
-        if (currentDepth + 1 < maxDepth) {
-          const subResults = await listDirectory(
-            fullPath,
-            maxDepth,
-            currentDepth + 1
-          );
-          results.push(...subResults);
-        }
-      } else if (stats.isFile()) {
-        results.push({
-          name: entry,
-          path: fullPath,
-          type: 'file',
-          size: stats.size,
-        });
-      }
+      await processDirectoryEntry(
+        entry,
+        targetPath,
+        maxDepth,
+        currentDepth,
+        results
+      );
     }
 
     return results;
@@ -79,6 +100,12 @@ export async function listDirectory(
       `Failed to list directory ${targetPath}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
+}
+
+function formatLinesWithNumbers(lines: string[], startIndex: number): string {
+  return lines
+    .map((line, idx) => `${startIndex + idx + 1}| ${line}`)
+    .join('\n');
 }
 
 /**
@@ -93,22 +120,98 @@ export async function readFileContent(
     const content = await readFile(filePath, 'utf-8');
     const lines = content.split('\n');
 
-    if (startLine !== undefined || endLine !== undefined) {
-      const start = Math.max(0, (startLine ?? 1) - 1);
-      const end = endLine ? Math.min(lines.length, endLine) : lines.length;
-      const selectedLines = lines.slice(start, end);
-
-      return selectedLines
-        .map((line, idx) => `${start + idx + 1}| ${line}`)
-        .join('\n');
+    if (startLine === undefined && endLine === undefined) {
+      return formatLinesWithNumbers(lines, 0);
     }
 
-    // Return with line numbers for all lines
-    return lines.map((line, idx) => `${idx + 1}| ${line}`).join('\n');
+    const start = Math.max(0, (startLine ?? 1) - 1);
+    const end = endLine ? Math.min(lines.length, endLine) : lines.length;
+    const selectedLines = lines.slice(start, end);
+
+    return formatLinesWithNumbers(selectedLines, start);
   } catch (error) {
     throw new Error(
       `Failed to read file ${filePath}: ${error instanceof Error ? error.message : String(error)}`
     );
+  }
+}
+
+function isTextFile(filePath: string): boolean {
+  return /\.(ts|js|json|md|txt|tsx|jsx|css|html|yml|yaml)$/.test(filePath);
+}
+
+async function searchFileForPattern(
+  filePath: string,
+  regex: RegExp,
+  results: GrepResult[],
+  maxResults: number
+): Promise<void> {
+  if (results.length >= maxResults) {
+    return;
+  }
+
+  try {
+    const content = await readFile(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    for (let i = 0; i < lines.length; i++) {
+      if (results.length >= maxResults) {
+        break;
+      }
+
+      const line = lines[i];
+      const matches = line.match(regex);
+
+      if (matches) {
+        results.push({
+          file: filePath,
+          line: i + 1,
+          content: line.trim(),
+          match: matches[0],
+        });
+      }
+    }
+  } catch (error) {
+    // Skip files that can't be read
+  }
+}
+
+async function walkDirectoryForGrep(
+  dirPath: string,
+  regex: RegExp,
+  results: GrepResult[],
+  maxResults: number
+): Promise<void> {
+  if (results.length >= maxResults) {
+    return;
+  }
+
+  try {
+    const entries = await readdir(dirPath);
+
+    for (const entry of entries) {
+      if (results.length >= maxResults) {
+        break;
+      }
+
+      if (shouldIgnoreEntry(entry)) {
+        continue;
+      }
+
+      const fullPath = join(dirPath, entry);
+      const stats = await stat(fullPath);
+
+      if (stats.isDirectory()) {
+        await walkDirectoryForGrep(fullPath, regex, results, maxResults);
+        continue;
+      }
+
+      if (stats.isFile() && isTextFile(fullPath)) {
+        await searchFileForPattern(fullPath, regex, results, maxResults);
+      }
+    }
+  } catch (error) {
+    // Skip directories we can't access
   }
 }
 
@@ -123,84 +226,12 @@ export async function grepSearch(
   const results: GrepResult[] = [];
   const regex = new RegExp(pattern, 'gi');
 
-  async function searchInFile(filePath: string): Promise<void> {
-    if (results.length >= maxResults) {
-      return;
-    }
-
-    try {
-      const content = await readFile(filePath, 'utf-8');
-      const lines = content.split('\n');
-
-      for (let i = 0; i < lines.length; i++) {
-        if (results.length >= maxResults) {
-          break;
-        }
-
-        const line = lines[i];
-        const matches = line.match(regex);
-
-        if (matches) {
-          results.push({
-            file: filePath,
-            line: i + 1,
-            content: line.trim(),
-            match: matches[0],
-          });
-        }
-      }
-    } catch (error) {
-      // Skip files that can't be read
-    }
-  }
-
-  async function walkDirectory(dirPath: string): Promise<void> {
-    if (results.length >= maxResults) {
-      return;
-    }
-
-    try {
-      const entries = await readdir(dirPath);
-
-      for (const entry of entries) {
-        if (results.length >= maxResults) {
-          break;
-        }
-
-        // Skip ignored patterns
-        if (
-          entry.startsWith('.') ||
-          entry === 'node_modules' ||
-          entry === 'dist' ||
-          entry === 'build'
-        ) {
-          continue;
-        }
-
-        const fullPath = join(dirPath, entry);
-        const stats = await stat(fullPath);
-
-        if (stats.isDirectory()) {
-          await walkDirectory(fullPath);
-        } else if (stats.isFile()) {
-          // Only search text files
-          if (
-            fullPath.match(/\.(ts|js|json|md|txt|tsx|jsx|css|html|yml|yaml)$/)
-          ) {
-            await searchInFile(fullPath);
-          }
-        }
-      }
-    } catch (error) {
-      // Skip directories we can't access
-    }
-  }
-
   const stats = await stat(targetPath);
+
   if (stats.isFile()) {
-    await searchInFile(targetPath);
+    await searchFileForPattern(targetPath, regex, results, maxResults);
   } else {
-    await walkDirectory(targetPath);
+    await walkDirectoryForGrep(targetPath, regex, results, maxResults);
   }
 
   return results;

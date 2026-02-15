@@ -1,0 +1,34 @@
+{
+  "thresholds": {
+    "cyclomaticComplexity": {
+      "error": 15,
+      "warn": 10
+    },
+    "functionLines": {
+      "error": 100,
+      "warn": 75
+    },
+    "fileLines": {
+      "error": 300,
+      "warn": 250
+    },
+    "nestingDepth": {
+      "error": 7,
+      "warn": 5
+    },
+    "functionParameters": {
+      "error": 5,
+      "warn": 4
+    }
+  },
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/dist/**",
+    "**/*.config.ts",
+    "**/scripts/**"
+  ],
+  "include": [
+    "src/**/*.ts"
+  ]
+}

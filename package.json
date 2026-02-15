@@ -17,7 +17,10 @@
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "quality": "tsx scripts/code-quality-check.ts",
+    "quality:staged": "tsx scripts/code-quality-check.ts --staged",
+    "prepare": "husky"
   },
   "keywords": [
     "cli",
@@ -38,7 +41,9 @@
     "eslint": "^8.56.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.1.3",
+    "husky": "^9.1.7",
     "prettier": "^3.2.5",
+    "ts-morph": "^27.0.2",
     "tsup": "^8.0.2",
     "tsx": "^4.21.0",
     "typescript": "^5.3.3"
